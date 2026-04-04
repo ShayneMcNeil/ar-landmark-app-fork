@@ -1,1 +1,39 @@
-/* You can add global styles to this file, and also import other style files */
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;700;800&family=Source+Sans+3:wght@400;600;700&display=swap');
+
+:root {
+  color-scheme: light;
+  --page-text: #3d2028;
+  --page-bg: #fff6f2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(215, 38, 56, 0.18), transparent 24%),
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.92), transparent 30%),
+    linear-gradient(180deg, #fff8f4 0%, #fff1ec 46%, #fff7f1 100%);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--page-text);
+  font-family: "Source Sans 3", Georgia, serif;
+  background:
+    linear-gradient(90deg, rgba(215, 38, 56, 0.08) 0 14%, transparent 14% 86%, rgba(215, 38, 56, 0.08) 86% 100%);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.72), transparent 18%),
+    radial-gradient(circle at 80% 0%, rgba(215, 38, 56, 0.08), transparent 24%);
+  z-index: -1;
+}

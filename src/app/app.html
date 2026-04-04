@@ -1,68 +1,218 @@
-<!-- main app template - one page layout with webcam feed and info overlay -->
-<main>
+<main class="page-shell">
+  <section class="hero-card">
+    <div class="hero-copy">
+      <p class="eyebrow">Canada in View</p>
+      <h1>AR Canadian Landmark Recognizer <span aria-hidden="true">🇨🇦</span></h1>
+      <p class="hero-text">
+        Snap a photo or upload an image to classify Canadian landmarks with the Teachable Machine model.
+      </p>
+
+      <div class="hero-badges" aria-label="Canadian themed highlights">
+        <span>🍁 Landmark AI</span>
+        <span>🦫 Photo snapshots</span>
+        <span>📍 Upload support</span>
+        <span>❄️ Session history</span>
+      </div>
+
+      <div class="action-row">
+        @if (!isCameraReady()) {
+          <button class="primary-action" (click)="startCamera()" [disabled]="isAnalyzing()">Open Camera</button>
+        } @else {
+          <button class="primary-action" (click)="snapPhoto()" [disabled]="isAnalyzing()">Snap Photo</button>
+          <button class="secondary-action" (click)="stopCamera()" [disabled]="isAnalyzing()">Close Camera</button>
+        }
+
+        <label class="upload-action" [class.is-disabled]="isAnalyzing()">
+          <input type="file" accept="image/*" (change)="onImageSelected($event)" [disabled]="isAnalyzing()">
+          Upload Image
+        </label>
+
+        @if (currentImageUrl() && !isCameraReady()) {
+          <button class="ghost-action" (click)="clearCurrentSelection()" [disabled]="isAnalyzing()">Clear Current</button>
+        }
+      </div>
+    </div>
+
+    <aside class="hero-note">
+      <div class="note-icon" aria-hidden="true">🍁</div>
+      <p class="note-title">Landmarks this model knows</p>
+      <div class="landmark-chip-list">
+        @for (landmark of detectableLandmarks; track landmark) {
+          <span>{{ landmark }}</span>
+        }
+      </div>
+      <p class="note-body">The model also has a fallback class for images that are not recognized as landmarks.</p>
+    </aside>
+  </section>
 
   @if (isLoading()) {
-    <p>Loading model, please wait...</p>
+    <section class="status-card loading-card">
+      <p class="status-label">Preparing model</p>
+      <h2>Loading the classifier for your first scan.</h2>
+      <p>Please wait a moment while the Teachable Machine model warms up.</p>
+    </section>
   }
 
   @if (errorMessage()) {
-    <p style="color: red;">{{ errorMessage() }}</p>
+    <section class="status-card error-card">
+      <p class="status-label">Camera or model issue</p>
+      <h2>{{ errorMessage() }}</h2>
+      <p>Check permissions, refresh the page, and try again.</p>
+    </section>
   }
 
   @if (!isLoading() && !errorMessage()) {
+    <section class="content-grid">
+      <div class="left-column">
+        <section class="camera-panel panel-card">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">{{ isCameraReady() ? 'Camera Preview' : 'Saved Photo' }}</p>
+              <h2>Scan a landmark</h2>
+            </div>
+            <span class="camera-chip">
+              {{
+                isAnalyzing()
+                  ? 'Analyzing image'
+                  : (isCameraReady() ? 'Ready to snap' : (currentImageSource() === 'upload' ? 'Uploaded image' : 'Photo ready'))
+              }}
+            </span>
+          </div>
 
-    <h1>AR Canadian Landmark Recognizer</h1>
-    <p>Point your camera at a Canadian landmark to identify it.</p>
+          <p class="panel-copy">
+            @if (isCameraReady()) {
+              Frame the landmark, then snap a photo to analyze it.
+            } @else {
+              Uploaded and captured photos appear here while the model evaluates them.
+            }
+          </p>
 
-    @if (!isRunning()) {
-      <button (click)="startWebcam()">Start Camera</button>
-    } @else {
-      <button (click)="stopWebcam()">Stop Camera</button>
-    }
+          <div id="webcam-container" [class.camera-active]="isCameraReady()" [class.is-busy]="isAnalyzing()">
+            @if (!isCameraReady() && currentImageUrl(); as imageUrl) {
+              <img class="uploaded-preview" [src]="imageUrl" alt="Current photo being analyzed">
+            } @else if (!isCameraReady()) {
+              <div class="camera-placeholder">
+                <div class="placeholder-emojis" aria-hidden="true">🇨🇦 🍁 📷</div>
+                <p>Open the camera to snap a photo, or upload an image to begin recognition.</p>
+              </div>
+            }
 
-    @if (isRunning()) {
-      <div id="app-layout">
+            @if (isAnalyzing()) {
+              <div class="analysis-overlay">
+                <div class="spinner" aria-hidden="true"></div>
+                <p>Analyzing your image...</p>
+              </div>
+            }
+          </div>
+        </section>
 
-        <!-- webcam canvas gets inserted here by the component -->
-        <div id="webcam-container"></div>
+        <section class="panel-card history-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Temporary History</p>
+              <h2>Recent photos</h2>
+            </div>
+            @if (history().length) {
+              <button class="ghost-action compact-action" (click)="clearHistory()">Clear History</button>
+            }
+          </div>
 
-        <!-- info panel shown beside the webcam -->
-        <div id="overlay-panel">
+          @if (history().length) {
+            <div class="history-list">
+              @for (item of history(); track item.id) {
+                <article class="history-item">
+                  <img [src]="item.imageUrl" [alt]="item.label">
+                  <div class="history-copy">
+                    <div class="history-meta">
+                      <span>{{ item.source === 'camera' ? 'Camera' : 'Upload' }}</span>
+                      <span>{{ item.timestamp }}</span>
+                    </div>
+                    <h3>{{ item.label }}</h3>
+                    <p class="history-confidence">{{ item.confidence }} confidence</p>
+                    <p>{{ item.summary }}</p>
+                  </div>
+                </article>
+              }
+            </div>
+          } @else {
+            <p class="predictions-empty">Each snapped or uploaded photo will be saved here for this session.</p>
+          }
+        </section>
+      </div>
+
+      <div class="info-column">
+        <section class="panel-card results-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Top Match</p>
+              <h2>Recognition results</h2>
+            </div>
+            <span class="results-chip">🦫 AI verdict</span>
+          </div>
 
           @if (topPrediction(); as top) {
-
             @if (top.className !== 'not-a-landmark' && top.probability > 0.7) {
-              <h2>{{ getDisplayName(top.className) }}</h2>
-              <p>Confidence: {{ getConfidencePercent(top.probability) }}</p>
+              <div class="headline-result">
+                <p class="result-name">{{ getDisplayName(top.className) }}</p>
+                <p class="result-confidence">{{ getConfidencePercent(top.probability) }} confidence</p>
+              </div>
 
-              @if (landmarkInfo()) {
-                <p>{{ landmarkInfo() }}</p>
-              } @else {
-                <p>Loading info...</p>
+              <div class="landmark-summary">
+                @if (landmarkInfo()) {
+                  <p>{{ landmarkInfo() }}</p>
+                } @else {
+                  <p>Loading landmark details from Wikipedia...</p>
+                }
+              </div>
+
+              @if (currentImageUrl(); as imageUrl) {
+                <div class="result-preview">
+                  <p class="panel-kicker">Your Photo</p>
+                  <img class="result-preview-image" [src]="imageUrl" alt="Preview of the current recognized photo">
+                </div>
               }
-
             } @else {
-              <p>No landmark detected. Try pointing at a Canadian landmark.</p>
+              <div class="empty-state">
+                <p class="empty-title">No strong landmark match yet</p>
+                <p>Try a clearer image, tighter framing, or a more recognizable landmark view.</p>
+              </div>
             }
-
           } @else {
-            <p>Waiting for prediction...</p>
+            <div class="empty-state">
+              <p class="empty-title">Waiting for a photo</p>
+              <p>Snap or upload an image to generate a result.</p>
+            </div>
           }
+        </section>
 
-          <!-- show all class scores, useful for the demo -->
-          <hr>
-          <h3>All Predictions</h3>
-          <ul>
-            @for (pred of allPredictions(); track pred.className) {
-              <li>{{ getDisplayName(pred.className) }}: {{ getConfidencePercent(pred.probability) }}</li>
-            }
-          </ul>
+        <section class="panel-card predictions-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Confidence Board</p>
+              <h2>All Predictions</h2>
+            </div>
+            <span class="results-chip">🍁 Ranked once per photo</span>
+          </div>
 
-        </div>
-
+          @if (allPredictions().length) {
+            <ul class="prediction-list">
+              @for (pred of allPredictions(); track pred.className) {
+                <li class="prediction-item">
+                  <div class="prediction-label-row">
+                    <span class="prediction-name">{{ getDisplayName(pred.className) }}</span>
+                    <span class="prediction-value">{{ getConfidencePercent(pred.probability) }}</span>
+                  </div>
+                  <div class="prediction-bar">
+                    <span class="prediction-fill" [style.width]="getConfidencePercent(pred.probability)"></span>
+                  </div>
+                </li>
+              }
+            </ul>
+          } @else {
+            <p class="predictions-empty">Predictions appear after each snapped or uploaded photo.</p>
+          }
+        </section>
       </div>
-    }
-
+    </section>
   }
-
 </main>

@@ -2,10 +2,19 @@ import { Component, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import * as tmImage from '@teachablemachine/image';
 
-// shape of each result the model gives back
 interface Prediction {
   className: string;
   probability: number;
+}
+
+interface HistoryItem {
+  id: number;
+  imageUrl: string;
+  source: 'camera' | 'upload';
+  label: string;
+  confidence: string;
+  summary: string;
+  timestamp: string;
 }
 
 @Component({
@@ -15,49 +24,62 @@ interface Prediction {
   styleUrl: './app.css'
 })
 export class App implements OnInit, OnDestroy {
-
-  // model files are stored in public/model/
   private readonly MODEL_URL = 'model/';
+  private readonly DETECTABLE_LABEL_KEYS = [
+    'butchart-gardens',
+    'chateau-frontenac',
+    'cn-tower',
+    'halifax-citadel',
+    'lake-louise',
+    'lions-gate-bridge',
+    'niagara-falls',
+    'notre-dame-montreal',
+    'parliament-hill',
+    'rideau-canal',
+  ] as const;
 
   private model: tmImage.CustomMobileNet | null = null;
   private webcam: tmImage.Webcam | null = null;
-  private animationFrameId: number | null = null;
+  private previewFrameId: number | null = null;
+  private historyId = 0;
 
-  // used to control what shows in the template
   isLoading = signal(true);
-  isRunning = signal(false);
+  isAnalyzing = signal(false);
+  isCameraReady = signal(false);
   errorMessage = signal('');
   topPrediction = signal<Prediction | null>(null);
   allPredictions = signal<Prediction[]>([]);
   landmarkInfo = signal('');
+  currentImageUrl = signal<string | null>(null);
+  currentImageSource = signal<'camera' | 'upload' | null>(null);
+  history = signal<HistoryItem[]>([]);
 
-  // track last fetched landmark so we don't keep calling wikipedia for the same one
   private lastFetchedLandmark = '';
 
-  // maps model class names to proper display names
   private readonly LANDMARK_DISPLAY_NAMES: Record<string, string> = {
-    'butchart-gardens':    'Butchart Gardens',
-    'chateau-frontenac':   'Château Frontenac',
-    'cn-tower':            'CN Tower',
-    'halifax-citadel':     'Halifax Citadel',
-    'lake-louise':         'Lake Louise',
-    'lions-gate-bridge':   'Lions Gate Bridge',
-    'niagara-falls':       'Niagara Falls',
-    'not-a-landmark':      'Not a Landmark',
+    'butchart-gardens': 'Butchart Gardens',
+    'chateau-frontenac': 'Chateau Frontenac',
+    'cn-tower': 'CN Tower',
+    'halifax-citadel': 'Halifax Citadel',
+    'lake-louise': 'Lake Louise',
+    'lions-gate-bridge': 'Lions Gate Bridge',
+    'niagara-falls': 'Niagara Falls',
+    'not-a-landmark': 'Not a Landmark',
     'notre-dame-montreal': 'Notre-Dame Basilica',
-    'parliament-hill':     'Parliament Hill',
-    'rideau-canal':        'Rideau Canal',
+    'parliament-hill': 'Parliament Hill',
+    'rideau-canal': 'Rideau Canal',
   };
+
+  detectableLandmarks = this.DETECTABLE_LABEL_KEYS.map((key) => this.LANDMARK_DISPLAY_NAMES[key]);
 
   async ngOnInit(): Promise<void> {
     await this.initModel();
   }
 
   ngOnDestroy(): void {
-    this.stopWebcam();
+    this.stopCamera();
   }
 
-  // load the teachable machine model on startup
   private async initModel(): Promise<void> {
     try {
       this.model = await tmImage.load(
@@ -72,35 +94,37 @@ export class App implements OnInit, OnDestroy {
     }
   }
 
-  // start webcam and kick off the prediction loop
-  async startWebcam(): Promise<void> {
-    if (!this.model) return;
+  async startCamera(): Promise<void> {
+    if (!this.model || this.isAnalyzing()) return;
 
     try {
-      // 224x224 is the size the model expects
+      this.errorMessage.set('');
+      this.clearCurrentResult();
+
       this.webcam = new tmImage.Webcam(224, 224, true);
       await this.webcam.setup();
       await this.webcam.play();
 
       const container = document.getElementById('webcam-container');
       if (container && this.webcam.canvas) {
+        container.innerHTML = '';
         container.appendChild(this.webcam.canvas);
       }
 
-      this.isRunning.set(true);
-      this.loop();
+      this.isCameraReady.set(true);
+      this.startPreviewLoop();
     } catch (err) {
       this.errorMessage.set('Could not access webcam. Please allow camera permissions.');
       console.error(err);
     }
   }
 
-  // stop webcam and clean everything up
-  stopWebcam(): void {
-    if (this.animationFrameId !== null) {
-      cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = null;
+  stopCamera(): void {
+    if (this.previewFrameId !== null) {
+      cancelAnimationFrame(this.previewFrameId);
+      this.previewFrameId = null;
     }
+
     if (this.webcam) {
       this.webcam.stop();
       this.webcam = null;
@@ -109,46 +133,116 @@ export class App implements OnInit, OnDestroy {
     const container = document.getElementById('webcam-container');
     if (container) container.innerHTML = '';
 
-    this.isRunning.set(false);
-    this.topPrediction.set(null);
-    this.allPredictions.set([]);
-    this.landmarkInfo.set('');
-    this.lastFetchedLandmark = '';
+    this.isCameraReady.set(false);
   }
 
-  // runs every frame while webcam is active
-  private async loop(): Promise<void> {
-    if (!this.webcam || !this.model) return;
+  async snapPhoto(): Promise<void> {
+    if (!this.model || !this.webcam || this.isAnalyzing()) return;
 
-    this.webcam.update();
-    await this.predict();
+    this.errorMessage.set('');
+    this.isAnalyzing.set(true);
 
-    this.animationFrameId = requestAnimationFrame(() => this.loop());
-  }
+    try {
+      this.webcam.update();
+      const imageUrl = this.webcam.canvas.toDataURL('image/jpeg', 0.92);
+      this.currentImageUrl.set(imageUrl);
+      this.currentImageSource.set('camera');
 
-  // run the model on the current webcam frame and update the UI
-  private async predict(): Promise<void> {
-    if (!this.model || !this.webcam) return;
-
-    const predictions: Prediction[] = await this.model.predict(this.webcam.canvas);
-
-    const sorted = [...predictions].sort((a, b) => b.probability - a.probability);
-    this.allPredictions.set(sorted);
-
-    const top = sorted[0];
-    this.topPrediction.set(top);
-
-    // only fetch wikipedia info if we're confident it's actually a landmark
-    if (top && top.probability > 0.7 && top.className !== 'not-a-landmark') {
-      this.fetchLandmarkInfo(top.className);
-    } else if (top?.className === 'not-a-landmark') {
-      this.landmarkInfo.set('');
+      await this.analyzeImageElement(this.webcam.canvas, imageUrl, 'camera');
+      this.stopCamera();
+    } catch (err) {
+      this.errorMessage.set('Could not capture that photo. Please try again.');
+      console.error(err);
+    } finally {
+      this.isAnalyzing.set(false);
     }
   }
 
-  // pull a short summary from wikipedia for the detected landmark
-  private async fetchLandmarkInfo(className: string): Promise<void> {
-    if (className === this.lastFetchedLandmark) return;
+  async onImageSelected(event: Event): Promise<void> {
+    if (!this.model || this.isAnalyzing()) return;
+
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    this.errorMessage.set('');
+    this.stopCamera();
+    this.clearCurrentResult();
+    this.isAnalyzing.set(true);
+
+    try {
+      const imageUrl = await this.readFileAsDataUrl(file);
+      this.currentImageUrl.set(imageUrl);
+      this.currentImageSource.set('upload');
+
+      const image = await this.loadImage(imageUrl);
+      await this.analyzeImageElement(image, imageUrl, 'upload');
+    } catch (err) {
+      this.errorMessage.set('Could not read that image. Please try a different file.');
+      console.error(err);
+    } finally {
+      this.isAnalyzing.set(false);
+      input.value = '';
+    }
+  }
+
+  clearCurrentSelection(): void {
+    this.stopCamera();
+    this.clearCurrentResult();
+  }
+
+  clearHistory(): void {
+    this.history.set([]);
+  }
+
+  getDisplayName(className: string): string {
+    return this.LANDMARK_DISPLAY_NAMES[className] ?? className;
+  }
+
+  getConfidencePercent(probability: number): string {
+    return `${(probability * 100).toFixed(1)}%`;
+  }
+
+  private startPreviewLoop(): void {
+    const render = () => {
+      if (!this.webcam) return;
+      this.webcam.update();
+      this.previewFrameId = requestAnimationFrame(render);
+    };
+
+    render();
+  }
+
+  private async analyzeImageElement(
+    image: HTMLImageElement | HTMLCanvasElement,
+    imageUrl: string,
+    source: 'camera' | 'upload'
+  ): Promise<void> {
+    if (!this.model) return;
+
+    const predictions: Prediction[] = await this.model.predict(image);
+    const sorted = [...predictions].sort((a, b) => b.probability - a.probability);
+    this.allPredictions.set(sorted);
+
+    const top = sorted[0] ?? null;
+    this.topPrediction.set(top);
+
+    let summary = '';
+    if (top && top.probability > 0.7 && top.className !== 'not-a-landmark') {
+      summary = await this.resolveLandmarkInfo(top.className);
+      this.landmarkInfo.set(summary);
+    } else {
+      this.landmarkInfo.set('');
+      this.lastFetchedLandmark = '';
+    }
+
+    this.pushHistoryEntry(imageUrl, source, top, summary);
+  }
+
+  private async resolveLandmarkInfo(className: string): Promise<string> {
+    if (className === this.lastFetchedLandmark && this.landmarkInfo()) {
+      return this.landmarkInfo();
+    }
 
     this.lastFetchedLandmark = className;
     const displayName = this.LANDMARK_DISPLAY_NAMES[className] ?? className;
@@ -158,22 +252,67 @@ export class App implements OnInit, OnDestroy {
       const response = await fetch(url);
 
       if (!response.ok) {
-        this.landmarkInfo.set('No information found.');
-        return;
+        return 'No information found.';
       }
 
       const data = await response.json();
-      this.landmarkInfo.set(data.extract ?? 'No description available.');
+      return data.extract ?? 'No description available.';
     } catch {
-      this.landmarkInfo.set('Could not load landmark information.');
+      return 'Could not load landmark information.';
     }
   }
 
-  getDisplayName(className: string): string {
-    return this.LANDMARK_DISPLAY_NAMES[className] ?? className;
+  private pushHistoryEntry(
+    imageUrl: string,
+    source: 'camera' | 'upload',
+    top: Prediction | null,
+    summary: string
+  ): void {
+    const hasLandmark = !!top && top.probability > 0.7 && top.className !== 'not-a-landmark';
+    const label = hasLandmark && top ? this.getDisplayName(top.className) : 'No landmark detected';
+    const confidence = top ? this.getConfidencePercent(top.probability) : '0.0%';
+    const timestamp = new Date().toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+
+    const item: HistoryItem = {
+      id: ++this.historyId,
+      imageUrl,
+      source,
+      label,
+      confidence,
+      summary: hasLandmark ? summary : 'The model did not find a confident landmark match in this photo.',
+      timestamp,
+    };
+
+    this.history.update((items) => [item, ...items]);
   }
 
-  getConfidencePercent(probability: number): string {
-    return (probability * 100).toFixed(1) + '%';
+  private clearCurrentResult(): void {
+    this.currentImageUrl.set(null);
+    this.currentImageSource.set(null);
+    this.topPrediction.set(null);
+    this.allPredictions.set([]);
+    this.landmarkInfo.set('');
+    this.lastFetchedLandmark = '';
+  }
+
+  private loadImage(src: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('Image failed to load'));
+      image.src = src;
+    });
+  }
+
+  private readFileAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error ?? new Error('File read failed'));
+      reader.readAsDataURL(file);
+    });
   }
 }
