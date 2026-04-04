@@ -238,7 +238,3 @@ This project is useful as a reference if you want to explore:
 - using camera capture in a frontend-only application
 - enriching ML predictions with third-party web APIs
 - building a student portfolio or demonstration app around computer vision concepts
-
-## License And Ownership
-
-No license file is currently included in this repository. If you plan to reuse, publish, or redistribute the project, add an explicit license first.
